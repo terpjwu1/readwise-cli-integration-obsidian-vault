@@ -7,7 +7,8 @@
     "sync": "node sync.mjs",
     "sync:full": "node sync.mjs --full",
     "sync:quick": "node sync.mjs --limit 50",
-    "search": "node graphrag/server.mjs"
+    "search": "node graphrag/server.mjs",
+    "enrich": "node enrich.mjs"
   },
   "dependencies": {
     "express": "^5.2.1"
