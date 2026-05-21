@@ -6,6 +6,10 @@
   "scripts": {
     "sync": "node sync.mjs",
     "sync:full": "node sync.mjs --full",
-    "sync:quick": "node sync.mjs --limit 50"
+    "sync:quick": "node sync.mjs --limit 50",
+    "search": "node graphrag/server.mjs"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
   }
 }

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Readwise Search</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0d1117; color: #c9d1d9; height: 100vh; display: flex; flex-direction: column; }
+
+  header { padding: 12px 20px; border-bottom: 1px solid #21262d; font-size: 14px; color: #8b949e; }
+  header span { color: #58a6ff; font-weight: 600; }
+
+  #chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+
+  .msg { max-width: 800px; width: 100%; margin: 0 auto; }
+  .msg.user { }
+  .msg.user .bubble { background: #1f6feb; color: #fff; padding: 8px 14px; border-radius: 12px; display: inline-block; }
+  .msg.results { }
+
+  .tool-calls { margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .tool-pill { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #161b22; border: 1px solid #30363d; color: #8b949e; font-family: monospace; }
+  .tool-pill .name { color: #d2a8ff; }
+  .tool-pill .meta { color: #58a6ff; }
+  .tool-pill .err { color: #f85149; }
+
+  .result-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; }
+  .result-card .title { font-weight: 600; color: #58a6ff; font-size: 14px; text-decoration: none; }
+  .result-card .title:hover { text-decoration: underline; }
+  .result-card .meta { font-size: 12px; color: #8b949e; margin-top: 4px; }
+  .result-card .meta .tag { background: #1f6feb22; color: #58a6ff; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+  .result-card .meta .source-badge { background: #21262d; color: #d2a8ff; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-family: monospace; }
+  .result-card .snippet { font-size: 13px; color: #c9d1d9; margin-top: 8px; line-height: 1.5; }
+  .result-card .snippet mark { background: #d2a8ff33; color: #d2a8ff; padding: 0 2px; border-radius: 2px; }
+  .result-card .wiki-link { font-size: 12px; margin-top: 6px; }
+  .result-card .wiki-link a { color: #3fb950; text-decoration: none; font-family: monospace; }
+  .result-card .wiki-link a:hover { text-decoration: underline; }
+  .result-card .citation { font-size: 11px; color: #8b949e; font-weight: 600; margin-right: 6px; }
+
+  #input-bar { padding: 12px 20px; border-top: 1px solid #21262d; display: flex; gap: 8px; max-width: 840px; width: 100%; margin: 0 auto; }
+  #input-bar input { flex: 1; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 10px 14px; border-radius: 8px; font-size: 14px; outline: none; }
+  #input-bar input:focus { border-color: #58a6ff; }
+  #input-bar button { background: #1f6feb; color: #fff; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+  #input-bar button:hover { background: #388bfd; }
+  #input-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .tabs { display: flex; gap: 0; margin-bottom: 12px; border-bottom: 1px solid #21262d; }
+  .tab { padding: 6px 16px; font-size: 13px; color: #8b949e; cursor: pointer; border-bottom: 2px solid transparent; }
+  .tab:hover { color: #c9d1d9; }
+  .tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+  .tab .count { font-size: 11px; background: #21262d; padding: 1px 6px; border-radius: 8px; margin-left: 4px; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .loading { color: #8b949e; font-style: italic; font-size: 13px; }
+  .no-results { color: #8b949e; font-size: 13px; }
+</style>
+</head>
+<body>
+  <header><span>Readwise</span> Search &mdash; MCP-powered</header>
+  <div id="chat"></div>
+  <div id="input-bar">
+    <input id="q" type="text" placeholder="Search your library..." autofocus>
+    <button id="send">Search</button>
+  </div>
+<script>
+const chat = document.getElementById("chat");
+const input = document.getElementById("q");
+const btn = document.getElementById("send");
+
+function sanitize(name) {
+  if (!name) return "Untitled";
+  return name.replace(/[\\/:*?"<>|#^\[\]]/g, "-").replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+function wikiLink(title) {
+  return `obsidian://open?vault=vault&file=${encodeURIComponent("Documents/" + sanitize(title))}`;
+}
+
+function truncate(text, max = 300) {
+  if (!text || text.length <= max) return text || "";
+  return text.slice(0, max) + "...";
+}
+
+function renderToolCalls(toolCalls) {
+  return `<div class="tool-calls">${toolCalls.map(tc => {
+    if (tc.error) return `<span class="tool-pill"><span class="name">${tc.tool}</span> <span class="err">error</span></span>`;
+    return `<span class="tool-pill"><span class="name">${tc.tool}</span> <span class="meta">${tc.count} results, ${tc.ms}ms</span></span>`;
+  }).join("")}</div>`;
+}
+
+function renderResult(r, idx) {
+  const title = r.title || "Untitled";
+  const link = r.url ? `<a class="title" href="${r.url}" target="_blank">${title}</a>` : `<span class="title">${title}</span>`;
+  const tags = (r.tags || []).map(t => `<span class="tag">${typeof t === "string" ? t : t.name || t}</span>`).join(" ");
+  const sourceBadge = `<span class="source-badge">${r.source}</span>`;
+
+  // Documents have vault files; highlights (from books) may not
+  let wikiHtml = "";
+  if (r.type === "document") {
+    wikiHtml = `<div class="wiki-link"><a href="${wikiLink(title)}">[[Documents/${sanitize(title)}]]</a></div>`;
+  } else if (r.url) {
+    wikiHtml = `<div class="wiki-link"><a href="${r.url}" target="_blank">${r.url}</a></div>`;
+  }
+
+  let snippet = "";
+  if (r.type === "highlight" && r.text) {
+    snippet = `<div class="snippet">${truncate(r.text)}</div>`;
+  } else if (r.matches && r.matches.length) {
+    snippet = `<div class="snippet">${truncate(r.matches[0])}</div>`;
+  }
+
+  return `<div class="result-card">
+    <span class="citation">[${idx + 1}]</span>${link}
+    <div class="meta">${r.author || ""} ${r.category ? `&middot; ${r.category}` : ""} ${tags} ${sourceBadge}</div>
+    ${snippet}
+    ${wikiHtml}
+  </div>`;
+}
+
+async function search(query) {
+  // User message
+  chat.innerHTML += `<div class="msg user"><div class="bubble">${query}</div></div>`;
+
+  // Loading
+  const loadId = "load-" + Date.now();
+  chat.innerHTML += `<div class="msg results" id="${loadId}"><div class="loading">Searching...</div></div>`;
+  chat.scrollTop = chat.scrollHeight;
+
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
+    const data = await res.json();
+
+    const highlights = data.results.filter(r => r.type === "highlight");
+    const documents = data.results.filter(r => r.type === "document");
+    const tabId = "tabs-" + Date.now();
+
+    let html = renderToolCalls(data.toolCalls);
+
+    if (highlights.length === 0 && documents.length === 0) {
+      html += `<div class="no-results">No results found.</div>`;
+    } else {
+      html += `<div class="tabs">
+        <div class="tab active" data-tab="${tabId}-hl">Highlights <span class="count">${highlights.length}</span></div>
+        <div class="tab" data-tab="${tabId}-doc">Documents <span class="count">${documents.length}</span></div>
+      </div>`;
+      html += `<div class="tab-panel active" id="${tabId}-hl">`;
+      if (highlights.length === 0) html += `<div class="no-results">No highlights found.</div>`;
+      else html += highlights.map((r, i) => renderResult(r, i)).join("");
+      html += `</div>`;
+      html += `<div class="tab-panel" id="${tabId}-doc">`;
+      if (documents.length === 0) html += `<div class="no-results">No documents found.</div>`;
+      else html += documents.map((r, i) => renderResult(r, i + highlights.length)).join("");
+      html += `</div>`;
+    }
+
+    document.getElementById(loadId).innerHTML = html;
+
+    // Tab switching
+    document.getElementById(loadId).querySelectorAll(".tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        const parent = tab.closest(".msg");
+        parent.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+        parent.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+        tab.classList.add("active");
+        document.getElementById(tab.dataset.tab).classList.add("active");
+      });
+    });
+  } catch (e) {
+    document.getElementById(loadId).innerHTML = `<div class="no-results">Error: ${e.message}</div>`;
+  }
+  btn.disabled = false;
+  chat.scrollTop = chat.scrollHeight;
+}
+
+btn.addEventListener("click", () => { if (input.value.trim()) { search(input.value.trim()); input.value = ""; } });
+input.addEventListener("keydown", (e) => { if (e.key === "Enter" && input.value.trim()) { search(input.value.trim()); input.value = ""; } });
+</script>
+</body>
+</html>
