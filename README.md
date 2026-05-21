@@ -1,10 +1,11 @@
 # Readwise → Obsidian Knowledge Graph
 
-Sync your [Readwise](https://readwise.io) library into an [Obsidian](https://obsidian.md) vault as an interconnected knowledge graph. Documents, highlights, tags, authors, and categories become linked markdown notes you can explore with Obsidian's graph view.
+Sync your [Readwise](https://readwise.io) library into an [Obsidian](https://obsidian.md) vault as an interconnected knowledge graph, and search it with a local web UI powered by the [Readwise MCP](https://readwise.io/mcp).
 
 ## What it does
 
-- Pulls **Reader documents** (articles, PDFs, videos, tweets, podcasts, etc.) and **Readwise highlights** via the [Readwise CLI](https://www.npmjs.com/package/@readwise/cli)
+**Vault sync** (via [Readwise CLI](https://www.npmjs.com/package/@readwise/cli)):
+- Pulls **Reader documents** (articles, PDFs, videos, tweets, podcasts, etc.) and **Readwise highlights**
 - Generates an Obsidian vault with `[[wikilinks]]` between everything:
   - `Documents/` — one note per saved item, with frontmatter metadata
   - `Tags/` — one note per tag, linking back to all tagged documents
@@ -13,6 +14,14 @@ Sync your [Readwise](https://readwise.io) library into an [Obsidian](https://obs
   - `Home.md` — map of content with stats and recent items
 - **Delta sync** — first run fetches everything; subsequent runs only fetch items updated since last sync
 - Preconfigured Obsidian graph colors (blue = docs, orange = tags, green = authors, pink = categories)
+
+**Search UI** (via [Readwise MCP](https://readwise.io/mcp)):
+- Local web interface at `localhost:3000` for searching your library
+- Calls `reader_search_documents` (hybrid search) and `readwise_search_highlights` (vector search) under the hood
+- Results in two tabs: **Highlights** and **Documents**
+- Shows tool call metadata (which MCP tool, result count, latency)
+- Citations `[1]`, `[2]` on each result
+- Obsidian `[[wikilinks]]` on document results that open the note directly in your vault
 
 ## Prerequisites
 
@@ -24,12 +33,15 @@ npm install -g @readwise/cli
 readwise login
 ```
 
-## Usage
+3. Install dependencies:
 
 ```bash
-git clone https://github.com/terpjwu1/readwise-cli-integration-obsidian-vault.git
-cd readwise-cli-integration-obsidian-vault
+npm install
+```
 
+## Vault Sync
+
+```bash
 # Full sync (first run, or to re-fetch everything)
 node sync.mjs --full
 
@@ -41,6 +53,25 @@ node sync.mjs --limit 50
 ```
 
 Then open the `vault/` folder in Obsidian ("Open folder as vault") and hit `Cmd+G` to see the graph.
+
+## Search UI
+
+```bash
+npm run search
+# → http://localhost:3000
+```
+
+Type a query to search across your documents and highlights. Results link back to Obsidian and Readwise.
+
+## Claude Code MCP Integration
+
+You can also add the Readwise MCP server directly to Claude Code for conversational search:
+
+```bash
+claude mcp add --transport http readwise https://mcp2.readwise.io/mcp
+```
+
+Then authenticate via `/mcp` in Claude Code. This gives Claude direct access to search your library, manage tags, create highlights, and more.
 
 ## How delta sync works
 
