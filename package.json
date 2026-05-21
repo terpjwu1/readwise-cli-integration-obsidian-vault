@@ -1,0 +1,11 @@
+{
+  "name": "readwise-graph",
+  "version": "1.0.0",
+  "description": "Sync Readwise data into an Obsidian knowledge graph",
+  "type": "module",
+  "scripts": {
+    "sync": "node sync.mjs",
+    "sync:full": "node sync.mjs --full",
+    "sync:quick": "node sync.mjs --limit 50"
+  }
+}
