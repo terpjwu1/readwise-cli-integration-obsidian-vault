@@ -30,12 +30,16 @@
   .result-card .meta { font-size: 12px; color: #8b949e; margin-top: 4px; }
   .result-card .meta .tag { background: #1f6feb22; color: #58a6ff; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
   .result-card .meta .source-badge { background: #21262d; color: #d2a8ff; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-family: monospace; }
+  .result-card .meta .overlap-badge { background: #238636; color: #fff; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-family: monospace; }
+  .result-card .meta .rerank-badge { background: #1f6feb; color: #fff; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-family: monospace; }
   .result-card .snippet { font-size: 13px; color: #c9d1d9; margin-top: 8px; line-height: 1.5; }
   .result-card .snippet mark { background: #d2a8ff33; color: #d2a8ff; padding: 0 2px; border-radius: 2px; }
   .result-card .wiki-link { font-size: 12px; margin-top: 6px; }
   .result-card .wiki-link a { color: #3fb950; text-decoration: none; font-family: monospace; }
   .result-card .wiki-link a:hover { text-decoration: underline; }
   .result-card .citation { font-size: 11px; color: #8b949e; font-weight: 600; margin-right: 6px; }
+  .result-card.highlight-cite { border-color: #58a6ff; transition: border-color 0.3s; }
+  .answer-block .cite-link { color: #58a6ff; cursor: pointer; font-weight: 600; font-size: 13px; }
 
   #input-bar { padding: 12px 20px; border-top: 1px solid #21262d; display: flex; gap: 8px; max-width: 840px; width: 100%; margin: 0 auto; }
   #input-bar input { flex: 1; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 10px 14px; border-radius: 8px; font-size: 14px; outline: none; }
@@ -52,6 +56,21 @@
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
+  .answer-block { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 14px; line-height: 1.6; font-size: 14px; }
+  .answer-block .answer-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .answer-block .answer-label .llm-badge { background: #238636; color: #fff; padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-left: 6px; font-family: monospace; }
+  .answer-block .answer-text { color: #e6edf3; }
+  .answer-block .answer-text p { margin-bottom: 8px; }
+  .answer-block .answer-loading { color: #8b949e; font-style: italic; }
+  .step-indicator { display: flex; gap: 12px; margin-bottom: 12px; font-size: 12px; }
+  .step { display: flex; align-items: center; gap: 6px; color: #484f58; }
+  .step.active { color: #d2a8ff; }
+  .step.done { color: #3fb950; }
+  .step .dot { width: 8px; height: 8px; border-radius: 50%; background: #484f58; }
+  .step.active .dot { background: #d2a8ff; animation: pulse 1s infinite; }
+  .step.done .dot { background: #3fb950; }
+  .step .step-ms { color: #8b949e; font-family: monospace; font-size: 11px; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
   .loading { color: #8b949e; font-style: italic; font-size: 13px; }
   .no-results { color: #8b949e; font-size: 13px; }
 </style>
@@ -85,19 +104,25 @@ function truncate(text, max = 300) {
 function renderToolCalls(toolCalls) {
   return `<div class="tool-calls">${toolCalls.map(tc => {
     if (tc.error) return `<span class="tool-pill"><span class="name">${tc.tool}</span> <span class="err">error</span></span>`;
-    return `<span class="tool-pill"><span class="name">${tc.tool}</span> <span class="meta">${tc.count} results, ${tc.ms}ms</span></span>`;
+    const extra = tc.dropped ? `, ${tc.dropped} below threshold` : "";
+    return `<span class="tool-pill"><span class="name">${tc.tool}</span> <span class="meta">${tc.kept !== undefined ? tc.kept : tc.count} results, ${tc.ms}ms${extra}</span></span>`;
   }).join("")}</div>`;
 }
 
-function renderResult(r, idx) {
+let resultIdPrefix = "";
+const citeLabel = (i) => String.fromCharCode(97 + i); // a, b, c, ...
+
+function renderResult(r, idx, origIdx) {
   const title = r.title || "Untitled";
   const link = r.url ? `<a class="title" href="${r.url}" target="_blank">${title}</a>` : `<span class="title">${title}</span>`;
   const tags = (r.tags || []).map(t => `<span class="tag">${typeof t === "string" ? t : t.name || t}</span>`).join(" ");
   const sourceBadge = `<span class="source-badge">${r.source}</span>`;
+  const overlapBadge = r.tagOverlap ? `<span class="overlap-badge">${r.tagOverlap} tag${r.tagOverlap > 1 ? "s" : ""} shared</span>` : "";
+  const rerankBadge = r.rerankerScore !== undefined ? `<span class="rerank-badge">${r.rerankerScore.toFixed(2)}</span>` : "";
+  const letter = origIdx !== undefined ? citeLabel(origIdx) : "";
 
-  // Documents have vault files; highlights (from books) may not
   let wikiHtml = "";
-  if (r.type === "document") {
+  if (r.type === "document" || r.type === "graph_neighbor") {
     wikiHtml = `<div class="wiki-link"><a href="${wikiLink(title)}">[[Documents/${sanitize(title)}]]</a></div>`;
   } else if (r.url) {
     wikiHtml = `<div class="wiki-link"><a href="${r.url}" target="_blank">${r.url}</a></div>`;
@@ -110,12 +135,18 @@ function renderResult(r, idx) {
     snippet = `<div class="snippet">${truncate(r.matches[0])}</div>`;
   }
 
-  return `<div class="result-card">
-    <span class="citation">[${idx + 1}]</span>${link}
-    <div class="meta">${r.author || ""} ${r.category ? `&middot; ${r.category}` : ""} ${tags} ${sourceBadge}</div>
+  return `<div class="result-card" id="${resultIdPrefix}-${letter}">
+    <span class="citation">[${letter}]</span>${link}
+    <div class="meta">${r.author || ""} ${r.category ? `&middot; ${r.category}` : ""} ${tags} ${sourceBadge} ${overlapBadge} ${rerankBadge}</div>
     ${snippet}
     ${wikiHtml}
   </div>`;
+}
+
+function linkifyCitations(text, prefix) {
+  return text.replace(/\[([a-z])\]/g, (match, letter) => {
+    return `<span class="cite-link" data-cite-prefix="${prefix}" data-cite-letter="${letter}">${match}</span>`;
+  });
 }
 
 async function search(query) {
@@ -124,8 +155,9 @@ async function search(query) {
 
   // Loading
   const loadId = "load-" + Date.now();
+  const answerId = "answer-" + Date.now();
   chat.innerHTML += `<div class="msg results" id="${loadId}"><div class="loading">Searching...</div></div>`;
-  chat.scrollTop = chat.scrollHeight;
+  document.getElementById(loadId).scrollIntoView({ behavior: "smooth", block: "start" });
 
   btn.disabled = true;
   try {
@@ -136,26 +168,51 @@ async function search(query) {
     });
     const data = await res.json();
 
+    // Tag each result with its original index for citation letters
+    data.results.forEach((r, i) => { r._origIdx = i; });
     const highlights = data.results.filter(r => r.type === "highlight");
     const documents = data.results.filter(r => r.type === "document");
+    const neighbors = data.results.filter(r => r.type === "graph_neighbor");
     const tabId = "tabs-" + Date.now();
+    resultIdPrefix = "ref-" + Date.now();
 
-    let html = renderToolCalls(data.toolCalls);
+    // Step indicator + answer block
+    const stepsId = "steps-" + Date.now();
+    let html = `<div class="step-indicator" id="${stepsId}">
+      <div class="step" id="${stepsId}-rerank"><span class="dot"></span> Rerank</div>
+      <div class="step" id="${stepsId}-answer"><span class="dot"></span> Answer</div>
+    </div>`;
+    html += `<div class="answer-block" id="${answerId}" style="display:none">
+      <div class="answer-label">Answer <span class="llm-badge">codex</span></div>
+      <div class="answer-loading">Generating answer...</div>
+    </div>`;
 
-    if (highlights.length === 0 && documents.length === 0) {
+    html += renderToolCalls(data.toolCalls);
+
+    const total = highlights.length + documents.length + neighbors.length;
+    if (total === 0) {
       html += `<div class="no-results">No results found.</div>`;
     } else {
       html += `<div class="tabs">
-        <div class="tab active" data-tab="${tabId}-hl">Highlights <span class="count">${highlights.length}</span></div>
+        <div class="tab active" data-tab="${tabId}-all">All <span class="count">${total}</span></div>
         <div class="tab" data-tab="${tabId}-doc">Documents <span class="count">${documents.length}</span></div>
+        <div class="tab" data-tab="${tabId}-graph">Graph <span class="count">${neighbors.length}</span></div>
+        <div class="tab" data-tab="${tabId}-hl">Highlights <span class="count">${highlights.length}</span></div>
       </div>`;
-      html += `<div class="tab-panel active" id="${tabId}-hl">`;
-      if (highlights.length === 0) html += `<div class="no-results">No highlights found.</div>`;
-      else html += highlights.map((r, i) => renderResult(r, i)).join("");
+      html += `<div class="tab-panel active" id="${tabId}-all">`;
+      html += data.results.map((r, i) => renderResult(r, i, i)).join("");
       html += `</div>`;
       html += `<div class="tab-panel" id="${tabId}-doc">`;
       if (documents.length === 0) html += `<div class="no-results">No documents found.</div>`;
-      else html += documents.map((r, i) => renderResult(r, i + highlights.length)).join("");
+      else html += documents.map((r, i) => renderResult(r, i, r._origIdx)).join("");
+      html += `</div>`;
+      html += `<div class="tab-panel" id="${tabId}-graph">`;
+      if (neighbors.length === 0) html += `<div class="no-results">No graph neighbors found.</div>`;
+      else html += neighbors.map((r, i) => renderResult(r, i, r._origIdx)).join("");
+      html += `</div>`;
+      html += `<div class="tab-panel" id="${tabId}-hl">`;
+      if (highlights.length === 0) html += `<div class="no-results">No highlights found.</div>`;
+      else html += highlights.map((r, i) => renderResult(r, i, r._origIdx)).join("");
       html += `</div>`;
     }
 
@@ -171,11 +228,156 @@ async function search(query) {
         document.getElementById(tab.dataset.tab).classList.add("active");
       });
     });
+
+    // 2-step Codex pipeline: rerank → answer
+    if (data.shouldAnswer && data.results.length > 0) {
+      (async () => {
+        let currentResults = data.results;
+        const stepRerank = document.getElementById(stepsId + "-rerank");
+        const stepAnswer = document.getElementById(stepsId + "-answer");
+        const answerEl = document.getElementById(answerId);
+
+        // Step 1: Rerank
+        stepRerank.classList.add("active");
+        try {
+          const rerankRes = await fetch("/api/rerank", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query, results: currentResults }),
+          });
+          const rerankData = await rerankRes.json();
+          stepRerank.classList.remove("active");
+          stepRerank.classList.add("done");
+          stepRerank.innerHTML = `<span class="dot"></span> Rerank <span class="step-ms">${rerankData.ms ? (rerankData.ms / 1000).toFixed(1) + "s" : ""}</span>`;
+          if (rerankData.results) {
+            currentResults = rerankData.results;
+            // Re-render results with reranked order
+            currentResults.forEach((r, i) => { r._origIdx = i; });
+            const reHighlights = currentResults.filter(r => r.type === "highlight");
+            const reDocs = currentResults.filter(r => r.type === "document");
+            const reNeighbors = currentResults.filter(r => r.type === "graph_neighbor");
+            const reTabId = "retabs-" + Date.now();
+            resultIdPrefix = "reref-" + Date.now();
+
+            // Rebuild tabs with reranked results
+            const reTotal = currentResults.length;
+            let reHtml = `<div class="tabs">
+              <div class="tab active" data-tab="${reTabId}-all">All <span class="count">${reTotal}</span></div>
+              <div class="tab" data-tab="${reTabId}-doc">Documents <span class="count">${reDocs.length}</span></div>
+              <div class="tab" data-tab="${reTabId}-graph">Graph <span class="count">${reNeighbors.length}</span></div>
+              <div class="tab" data-tab="${reTabId}-hl">Highlights <span class="count">${reHighlights.length}</span></div>
+            </div>`;
+            reHtml += `<div class="tab-panel active" id="${reTabId}-all">`;
+            reHtml += currentResults.map((r, i) => renderResult(r, i, i)).join("");
+            reHtml += `</div>`;
+            reHtml += `<div class="tab-panel" id="${reTabId}-doc">`;
+            if (reDocs.length === 0) reHtml += `<div class="no-results">No documents found.</div>`;
+            else reHtml += reDocs.map((r, i) => renderResult(r, i, r._origIdx)).join("");
+            reHtml += `</div>`;
+            reHtml += `<div class="tab-panel" id="${reTabId}-graph">`;
+            if (reNeighbors.length === 0) reHtml += `<div class="no-results">No graph neighbors found.</div>`;
+            else reHtml += reNeighbors.map((r, i) => renderResult(r, i, r._origIdx)).join("");
+            reHtml += `</div>`;
+            reHtml += `<div class="tab-panel" id="${reTabId}-hl">`;
+            if (reHighlights.length === 0) reHtml += `<div class="no-results">No highlights found.</div>`;
+            else reHtml += reHighlights.map((r, i) => renderResult(r, i, r._origIdx)).join("");
+            reHtml += `</div>`;
+
+            // Replace tabs section
+            const msgEl = document.getElementById(loadId);
+            const oldTabs = msgEl.querySelector(".tabs");
+            const oldPanels = msgEl.querySelectorAll(".tab-panel");
+            if (oldTabs) {
+              const wrapper = document.createElement("div");
+              wrapper.innerHTML = reHtml;
+              oldTabs.replaceWith(wrapper.querySelector(".tabs"));
+              oldPanels.forEach(p => p.remove());
+              // Append new panels after the new tabs
+              const newTabs = msgEl.querySelector(".tabs");
+              wrapper.querySelectorAll(".tab-panel").forEach(p => newTabs.after(p));
+            }
+
+            // Re-bind tab switching
+            msgEl.querySelectorAll(".tab").forEach(tab => {
+              tab.addEventListener("click", () => {
+                const parent = tab.closest(".msg");
+                parent.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+                parent.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+                tab.classList.add("active");
+                document.getElementById(tab.dataset.tab).classList.add("active");
+              });
+            });
+
+            // Add reranker tool pill
+            const toolCallsEl = msgEl.querySelector(".tool-calls");
+            if (toolCallsEl) {
+              toolCallsEl.innerHTML += `<span class="tool-pill"><span class="name">codex_rerank</span> <span class="meta">${currentResults.length} results, ${rerankData.ms}ms</span></span>`;
+            }
+          }
+        } catch (e) {
+          stepRerank.classList.remove("active");
+          stepRerank.classList.add("done");
+          stepRerank.innerHTML = `<span class="dot"></span> Rerank <span class="step-ms">failed</span>`;
+        }
+
+        // Step 2: Answer
+        stepAnswer.classList.add("active");
+        answerEl.style.display = "";
+        try {
+          const ansRes = await fetch("/api/answer", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query, results: currentResults }),
+          });
+          const ans = await ansRes.json();
+          stepAnswer.classList.remove("active");
+          stepAnswer.classList.add("done");
+          stepAnswer.innerHTML = `<span class="dot"></span> Answer <span class="step-ms">${ans.ms ? (ans.ms / 1000).toFixed(1) + "s" : ""}</span>`;
+
+          if (ans.answer) {
+            let formatted = ans.answer.replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>");
+            formatted = linkifyCitations(formatted, resultIdPrefix);
+            answerEl.innerHTML = `<div class="answer-label">Answer <span class="llm-badge">codex${ans.ms ? ` ${(ans.ms / 1000).toFixed(1)}s` : ""}</span></div>
+              <div class="answer-text"><p>${formatted}</p></div>`;
+            answerEl.querySelectorAll(".cite-link").forEach(link => {
+              link.addEventListener("click", () => {
+                const target = document.getElementById(link.dataset.citePrefix + "-" + link.dataset.citeLetter);
+                if (!target) return;
+                const panel = target.closest(".tab-panel");
+                if (panel && !panel.classList.contains("active")) {
+                  const msg = panel.closest(".msg");
+                  msg.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+                  msg.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+                  panel.classList.add("active");
+                  msg.querySelector(`.tab[data-tab="${panel.id}"]`).classList.add("active");
+                }
+                target.scrollIntoView({ behavior: "smooth", block: "center" });
+                target.classList.add("highlight-cite");
+                setTimeout(() => target.classList.remove("highlight-cite"), 2000);
+              });
+            });
+          } else {
+            answerEl.innerHTML = `<div class="answer-label">Answer</div>
+              <div class="answer-text" style="color:#8b949e">${ans.error || "Could not generate answer."}</div>`;
+          }
+          answerEl.scrollIntoView({ behavior: "smooth", block: "start" });
+        } catch (e) {
+          stepAnswer.classList.remove("active");
+          stepAnswer.classList.add("done");
+          answerEl.innerHTML = `<div class="answer-label">Answer</div>
+            <div class="answer-text" style="color:#8b949e">Failed to generate answer.</div>`;
+        }
+      })();
+    } else {
+      const el = document.getElementById(answerId);
+      if (el) el.remove();
+      const steps = document.getElementById(stepsId);
+      if (steps) steps.remove();
+    }
   } catch (e) {
     document.getElementById(loadId).innerHTML = `<div class="no-results">Error: ${e.message}</div>`;
   }
   btn.disabled = false;
-  chat.scrollTop = chat.scrollHeight;
 }
 
 btn.addEventListener("click", () => { if (input.value.trim()) { search(input.value.trim()); input.value = ""; } });
